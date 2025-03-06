@@ -199,27 +199,36 @@ def scrape_produce_items(driver, max_items=None):
     # Scroll to load all items (lazy loading)
     print("Scrolling to load all products...")
     scroll_attempts = 0
-    max_scroll_attempts = 10
+    max_scroll_attempts = 15  # Increased from 10 to allow more scrolling attempts
     last_height = driver.execute_script("return document.body.scrollHeight")
     
     while scroll_attempts < max_scroll_attempts:
-        # Scroll down
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        print(f"Scrolled down (attempt {scroll_attempts + 1})")
+        # Scroll down progressively (25% of viewport height at a time)
+        # This gives the page more time to load items as we scroll
+        current_height = driver.execute_script("return Math.max(document.documentElement.scrollTop, document.body.scrollTop);")
+        viewport_height = driver.execute_script("return window.innerHeight;")
+        next_scroll_position = min(current_height + viewport_height * 0.75, last_height)
         
-        # Wait for new items to load
-        time.sleep(3)
+        # Scroll to the next position
+        driver.execute_script(f"window.scrollTo(0, {next_scroll_position});")
+        print(f"Scrolled down progressively (attempt {scroll_attempts + 1})")
+        
+        # Wait for new items to load - increased from 3 to 5 seconds
+        time.sleep(5)
         
         # Calculate new scroll height and compare with last scroll height
         new_height = driver.execute_script("return document.body.scrollHeight")
-        if new_height == last_height:
-            # Try once more before breaking
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(3)
-            newer_height = driver.execute_script("return document.body.scrollHeight")
-            if newer_height == new_height:
-                print("Reached end of page after scrolling")
-                break
+        
+        # If we're at the bottom of the page or close to it
+        if current_height + viewport_height >= last_height * 0.95:
+            if new_height == last_height:
+                # Try once more before breaking
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(5)  # Increased wait time
+                newer_height = driver.execute_script("return document.body.scrollHeight")
+                if newer_height == new_height:
+                    print("Reached end of page after scrolling")
+                    break
         
         last_height = new_height
         scroll_attempts += 1
@@ -271,10 +280,10 @@ def scrape_produce_items(driver, max_items=None):
     
     # First extract basic info from the listing page
     product_list = []
+    seen_urls = set()  # Track URLs to avoid duplicates
+    
     for i, product in enumerate(products):
         try:
-            print(f"Processing product {i+1}/{len(products)} from list page")
-            
             # Get the product URL
             item_url = product.get_attribute("href")
             if not item_url.startswith("http"):
@@ -282,6 +291,16 @@ def scrape_produce_items(driver, max_items=None):
                 if item_url.startswith("/"):
                     base_url = "https://sameday.costco.com"
                     item_url = base_url + item_url
+            
+            # Skip if we've already seen this URL
+            if item_url in seen_urls:
+                print(f"Skipping duplicate product with URL: {item_url}")
+                continue
+            
+            # Add URL to our set of seen URLs
+            seen_urls.add(item_url)
+            
+            print(f"Processing product {i+1}/{len(products)} from list page")
             
             # Get product name from the listing page
             try:
@@ -530,10 +549,547 @@ def scrape_produce_items(driver, max_items=None):
                 "price": product_info['price']
             })
     
-    return items
+    # Final deduplication step - ensure no duplicate product IDs
+    deduplicated_items = []
+    seen_ids = set()
+    
+    for item in items:
+        # If we've seen this ID before, skip it
+        if item['id'] in seen_ids:
+            print(f"Removing duplicate product with ID: {item['id']}, name: {item['name']}")
+            continue
+        
+        # Otherwise, add it to our deduplicated list and track the ID
+        seen_ids.add(item['id'])
+        deduplicated_items.append(item)
+    
+    if len(items) != len(deduplicated_items):
+        print(f"Removed {len(items) - len(deduplicated_items)} duplicate products by ID")
+    
+    print(f"Successfully processed {len(deduplicated_items)} unique products")
+    return deduplicated_items
 
-def save_to_csv(items, filename="costco_produce_items.csv"):
+def scrape_items(driver, category="produce", max_items=None):
+    """Scrape all items from the specified category page."""
+    # Define category mappings (URL slugs and display names)
+    category_mappings = {
+        "produce": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-produce-50673",
+            "display_name": "produce"
+        },
+        "bakery": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-bakery-desserts-23722",
+            "display_name": "bakery"
+        },
+        "meat": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-meat-seafood-74327",
+            "display_name": "meat"
+        },
+        "deli": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-deli-37813",
+            "display_name": "deli"
+        },
+        "dairy": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-dairy-eggs-74913",
+            "display_name": "dairy"
+        },
+        "beverages": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-beverages-1068",
+            "display_name": "beverages"
+        },
+        "pantry": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-pantry-dry-goods-99939",
+            "display_name": "pantry"
+        },
+        "snacks": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-snacks-candy-nuts-80879",
+            "display_name": "snacks"
+        },
+        "frozen": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-frozen-foods-94815",
+            "display_name": "frozen"
+        },
+        "household": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-home-essentials-53494",
+            "display_name": "household"
+        },
+        "health": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-health-personal-care-6425",
+            "display_name": "health"
+        },
+        "baby": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-babies-19947",
+            "display_name": "baby"
+        },
+        "pet": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-pets-78792",
+            "display_name": "pet"
+        },
+        "alcohol": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-alcohol-77313",
+            "display_name": "alcohol"
+        },
+        "auto": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-auto-accessories-69500",
+            "display_name": "auto"
+        },
+        "cleaning": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-cleaning-laundry-products-75889",
+            "display_name": "cleaning"
+        },
+        "clothing": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-clothing-basics-85571",
+            "display_name": "clothing"
+        },
+        "electronics": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-electronics-93289",
+            "display_name": "electronics"
+        },
+        "garden": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-home-improvement-garden-87718",
+            "display_name": "garden"
+        },
+        "jewelry": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-jewelry-807",
+            "display_name": "jewelry"
+        },
+        "office": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-office-products-9771",
+            "display_name": "office"
+        },
+        "paper": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-paper-products-food-storage-18515",
+            "display_name": "paper"
+        },
+        "sports": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-sporting-goods-44049",
+            "display_name": "sports"
+        },
+        "toys": {
+            "url": "https://sameday.costco.com/store/costco/collections/n-toys-seasonal-5266",
+            "display_name": "toys"
+        },
+        "whats-new": {
+            "url": "https://sameday.costco.com/store/costco/collections/rc-whats-new",
+            "display_name": "whats-new"
+        },
+        "weekly-savings": {
+            "url": "https://sameday.costco.com/store/costco/collections/rc-weekly-savings",
+            "display_name": "weekly-savings"
+        },
+        "trending": {
+            "url": "https://sameday.costco.com/store/costco/collections/rc-trending",
+            "display_name": "trending"
+        },
+        "kirkland": {
+            "url": "https://sameday.costco.com/store/costco/collections/rc-kirkland-signature",
+            "display_name": "kirkland"
+        }
+    }
+    
+    # Get category info or default to produce
+    category_info = category_mappings.get(category.lower(), category_mappings["produce"])
+    category_url = category_info["url"]
+    display_name = category_info["display_name"]
+    
+    driver.get(category_url)
+    print(f"Navigated to {display_name} URL: {category_url}")
+    
+    # Save HTML for debugging
+    html_source = driver.page_source
+    with open(f"{display_name}_page_source.html", "w", encoding="utf-8") as f:
+        f.write(html_source)
+    print(f"Saved page source to {display_name}_page_source.html for debugging")
+    
+    # Handle any popups that might appear
+    handle_popups(driver)
+    
+    # Wait for page to fully load with a longer timeout
+    print("Waiting for page to fully load...")
+    time.sleep(10)
+    
+    # Take screenshot for debugging
+    driver.save_screenshot(f"{display_name}_page_loaded.png")
+    print(f"Saved screenshot of {display_name} page after loading")
+    
+    # Scroll to load all items (lazy loading)
+    print("Scrolling to load all products...")
+    scroll_attempts = 0
+    max_scroll_attempts = 15  # Increased from 10 to allow more scrolling attempts
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    
+    while scroll_attempts < max_scroll_attempts:
+        # Scroll down progressively (25% of viewport height at a time)
+        # This gives the page more time to load items as we scroll
+        current_height = driver.execute_script("return Math.max(document.documentElement.scrollTop, document.body.scrollTop);")
+        viewport_height = driver.execute_script("return window.innerHeight;")
+        next_scroll_position = min(current_height + viewport_height * 0.75, last_height)
+        
+        # Scroll to the next position
+        driver.execute_script(f"window.scrollTo(0, {next_scroll_position});")
+        print(f"Scrolled down progressively (attempt {scroll_attempts + 1})")
+        
+        # Wait for new items to load - increased from 3 to 5 seconds
+        time.sleep(5)
+        
+        # Calculate new scroll height and compare with last scroll height
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        
+        # If we're at the bottom of the page or close to it
+        if current_height + viewport_height >= last_height * 0.95:
+            if new_height == last_height:
+                # Try once more before breaking
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(5)  # Increased wait time
+                newer_height = driver.execute_script("return document.body.scrollHeight")
+                if newer_height == new_height:
+                    print("Reached end of page after scrolling")
+                    break
+        
+        last_height = new_height
+        scroll_attempts += 1
+    
+    # Take a final screenshot after scrolling
+    driver.save_screenshot("after_scrolling.png")
+    
+    # Based on the provided HTML structure, use these precise selectors
+    # Target the structure: <a role="button" href="/store/costco/products/[ID]-[NAME]" class="...">
+    product_selectors = [
+        "//a[@role='button' and contains(@href, '/store/costco/products/')]",
+        "//a[contains(@href, '/store/costco/products/')]",
+        "//div[contains(@class, 'e-19idom')]/ancestor::a",
+        "//div[contains(@class, 'e-bjn8wh')]/ancestor::a",
+        "//span[contains(@class, 'screen-reader-only') and contains(text(), 'Current price:')]/ancestor::a",
+        "//img[@data-testid='item-card-image']/ancestor::a"
+    ]
+    
+    products = []
+    used_selector = None
+    
+    for selector in product_selectors:
+        try:
+            print(f"Trying product selector: {selector}")
+            product_elements = driver.find_elements(By.XPATH, selector)
+            if product_elements and len(product_elements) > 0:
+                print(f"Found {len(product_elements)} products with selector: {selector}")
+                products = product_elements
+                used_selector = selector
+                break
+        except Exception as e:
+            print(f"Error with selector {selector}: {e}")
+    
+    if not products:
+        print("Could not find any products with our selectors. Saving page for debugging.")
+        driver.save_screenshot("no_products_found.png")
+        
+        # Look for any links that might be products
+        print("Looking for any links that might be products...")
+        links = driver.find_elements(By.TAG_NAME, "a")
+        product_links = [link for link in links if '/products/' in (link.get_attribute('href') or '')]
+        
+        if product_links:
+            print(f"Found {len(product_links)} potential product links")
+            products = product_links
+        else:
+            print("No product links found at all.")
+            return []
+    
+    # First extract basic info from the listing page
+    product_list = []
+    seen_urls = set()  # Track URLs to avoid duplicates
+    
+    for i, product in enumerate(products):
+        try:
+            # Get the product URL
+            item_url = product.get_attribute("href")
+            if not item_url.startswith("http"):
+                # Convert relative URL to absolute
+                if item_url.startswith("/"):
+                    base_url = "https://sameday.costco.com"
+                    item_url = base_url + item_url
+            
+            # Skip if we've already seen this URL
+            if item_url in seen_urls:
+                print(f"Skipping duplicate product with URL: {item_url}")
+                continue
+            
+            # Add URL to our set of seen URLs
+            seen_urls.add(item_url)
+            
+            print(f"Processing product {i+1}/{len(products)} from list page")
+            
+            # Get product name from the listing page
+            try:
+                # First try to find element with class that matches product name
+                name_element = product.find_element(By.XPATH, ".//div[contains(@class, 'e-147kl2c')]")
+                item_name = name_element.text.strip()
+            except:
+                try:
+                    # Fallback to heading role
+                    name_element = product.find_element(By.XPATH, ".//*[@role='heading']")
+                    item_name = name_element.text.strip()
+                except:
+                    # Other fallbacks
+                    try:
+                        non_price_texts = [el.text for el in product.find_elements(By.XPATH, ".//*[not(contains(text(), '$'))]") if el.text.strip()]
+                        if non_price_texts:
+                            item_name = max(non_price_texts, key=len).strip()
+                        else:
+                            item_name = f"Unnamed Product {i+1}"
+                    except:
+                        item_name = f"Unnamed Product {i+1}"
+            
+            # Get product price from the listing page
+            try:
+                price_element = product.find_element(By.XPATH, ".//span[contains(@class, 'screen-reader-only') and contains(text(), 'Current price:')]")
+                item_price = price_element.text.strip()
+            except:
+                try:
+                    # Alternative: Look for any text with $ sign
+                    price_elements = product.find_elements(By.XPATH, ".//*[contains(text(), '$')]")
+                    if price_elements:
+                        item_price = price_elements[0].text.strip()
+                    else:
+                        item_price = "Price not found"
+                except:
+                    item_price = "Price not found"
+            
+            # Get product image URL from the listing page
+            try:
+                # Look for the image with data-testid="item-card-image"
+                img_element = product.find_element(By.XPATH, ".//img[@data-testid='item-card-image']")
+                
+                # Try srcset first, which contains multiple resolution options
+                img_srcset = img_element.get_attribute("srcset")
+                if img_srcset:
+                    # Extract the highest resolution image (usually the 4x version at the end)
+                    srcset_parts = img_srcset.split(',')
+                    if srcset_parts and len(srcset_parts) >= 4:  # If we have the 4x version
+                        # Get the last part which should be the highest resolution
+                        highest_res_part = srcset_parts[-1].strip()
+                        # Extract the URL part before any whitespace
+                        item_img_url = highest_res_part.split(' ')[0].strip()
+                    elif srcset_parts:  # If we have at least one part
+                        # Take the first part if we don't have multiple resolutions
+                        first_part = srcset_parts[0].strip()
+                        item_img_url = first_part.split(' ')[0].strip()
+                    else:
+                        # Fallback to src if srcset parsing fails
+                        item_img_url = img_element.get_attribute("src")
+                else:
+                    # Fallback to src attribute
+                    item_img_url = img_element.get_attribute("src")
+                    
+                # Clean up the image URL if it contains filters or strange formatting
+                if item_img_url and "filters:" in item_img_url:
+                    # Try to extract the base URL before any filters
+                    base_img_url_parts = item_img_url.split("filters:")
+                    if len(base_img_url_parts) > 1:
+                        # Find the last part that looks like a valid URL
+                        for part in reversed(base_img_url_parts):
+                            if "http" in part:
+                                item_img_url = part[part.find("http"):]
+                                break
+            except:
+                try:
+                    # Fallback to any image
+                    img_element = product.find_element(By.XPATH, ".//img")
+                    item_img_url = img_element.get_attribute("src")
+                except:
+                    item_img_url = "Image not found"
+            
+            # Add to our list of products to visit
+            product_list.append({
+                "name": item_name,
+                "url": item_url,
+                "image_url": item_img_url,
+                "price": item_price,
+                "page_position": i+1
+            })
+            
+        except Exception as e:
+            print(f"Error extracting basic details for product {i+1}: {e}")
+            continue
+    
+    # If max_items is set, limit the number of products to process
+    if max_items and max_items > 0 and len(product_list) > max_items:
+        print(f"Limiting to {max_items} products for testing (out of {len(product_list)} found)")
+        product_list = product_list[:max_items]
+    
+    # Now navigate to each product page to get the actual Costco item ID
+    items = []
+    for i, product_info in enumerate(product_list):
+        try:
+            print(f"\nVisiting product page {i+1}/{len(product_list)}: {product_info['name']}")
+            print(f"URL: {product_info['url']}")
+            
+            # Navigate to the product page
+            driver.get(product_info['url'])
+            time.sleep(3)  # Wait for the page to load
+            
+            # Handle any popups
+            handle_popups(driver)
+            
+            # Extract the actual Costco item ID
+            item_id = None
+            try:
+                # Look for the item ID in the format: <div class="e-16zy4wa">Item: 57554</div>
+                id_selectors = [
+                    "//div[contains(@class, 'e-16zy4wa')]",
+                    "//div[contains(text(), 'Item:')]",
+                    "//*[contains(text(), 'Item:')]"
+                ]
+                
+                for id_selector in id_selectors:
+                    id_elements = driver.find_elements(By.XPATH, id_selector)
+                    for id_element in id_elements:
+                        id_text = id_element.text.strip()
+                        if "Item:" in id_text:
+                            # Extract the numeric ID from "Item: XXXXX"
+                            item_id = id_text.split("Item:")[1].strip()
+                            print(f"Found item ID: {item_id}")
+                            break
+                    
+                    if item_id:
+                        break
+                
+                # If still not found, try additional methods
+                if not item_id:
+                    # Try to find any element that might contain the item ID
+                    potential_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'Item')]")
+                    for elem in potential_elements:
+                        text = elem.text.strip()
+                        if "Item" in text and ":" in text:
+                            # Try to extract numeric content after "Item:"
+                            parts = text.split(":")
+                            if len(parts) > 1:
+                                potential_id = parts[1].strip()
+                                # Check if it's numeric
+                                if potential_id.isdigit():
+                                    item_id = potential_id
+                                    print(f"Found item ID with alternative method: {item_id}")
+                                    break
+            
+                # If still not found, create a placeholder ID
+                if not item_id:
+                    print("Could not find item ID on the product page")
+                    # Extract ID from URL as fallback
+                    url_parts = product_info['url'].split('/')
+                    if len(url_parts) > 0:
+                        last_part = url_parts[-1]
+                        # The ID-like part is before the first dash
+                        url_id = last_part.split('-')[0] if '-' in last_part else last_part
+                        item_id = f"url-{url_id}"
+                    else:
+                        item_id = f"unknown-{i+1}"
+            
+            except Exception as e:
+                print(f"Error extracting item ID: {e}")
+                # Use URL-based ID as fallback
+                url_parts = product_info['url'].split('/')
+                if len(url_parts) > 0:
+                    last_part = url_parts[-1]
+                    url_id = last_part.split('-')[0] if '-' in last_part else last_part
+                    item_id = f"url-{url_id}"
+                else:
+                    item_id = f"unknown-{i+1}"
+            
+            # Get a high-resolution product image from the detail page
+            try:
+                # First try to find the main product image on detail page
+                detail_img_selectors = [
+                    "//img[contains(@alt, 'hero')]",  # Specific selector from the example
+                    "//img[contains(@class, 'product-image')]",
+                    "//img[contains(@alt, 'product')]"
+                ]
+                
+                detail_img_element = None
+                
+                # Try each selector
+                for detail_selector in detail_img_selectors:
+                    detail_img_elements = driver.find_elements(By.XPATH, detail_selector)
+                    if detail_img_elements:
+                        detail_img_element = detail_img_elements[0]
+                        break
+                
+                if detail_img_element:
+                    # Get the highest quality image URL
+                    src_url = detail_img_element.get_attribute("src")
+                    srcset = detail_img_element.get_attribute("srcset")
+                    
+                    if srcset:  # Prefer srcset for highest resolution
+                        srcset_parts = srcset.split(',')
+                        if srcset_parts and len(srcset_parts) >= 4:  # If we have the 4x version
+                            # Get the last part which should be the highest resolution
+                            highest_res_part = srcset_parts[-1].strip()
+                            # Extract the URL part before any whitespace
+                            high_res_url = highest_res_part.split(' ')[0].strip()
+                            if high_res_url:
+                                product_info['image_url'] = high_res_url
+                        elif srcset_parts:  # If we have at least one part
+                            # Take the first part if we don't have multiple resolutions
+                            first_part = srcset_parts[0].strip()
+                            img_url = first_part.split(' ')[0].strip()
+                            if img_url:
+                                product_info['image_url'] = img_url
+                    elif src_url:  # Use src if srcset is not available
+                        product_info['image_url'] = src_url
+                        
+                    # Make sure we have a clean URL without truncation issues
+                    if product_info['image_url'] and product_info['image_url'].endswith(","):
+                        product_info['image_url'] = product_info['image_url'][:-1]
+            except Exception as e:
+                print(f"Error updating image URL from detail page: {e}")
+                # Keep the original image URL
+            
+            # Add the complete product information to our final list
+            items.append({
+                "name": product_info['name'],
+                "id": item_id,
+                "url": product_info['url'],
+                "image_url": product_info['image_url'],
+                "price": product_info['price']
+            })
+            
+            print(f"Added product with ID {item_id}: {product_info['name']} - {product_info['price']}")
+            print(f"Image URL: {product_info['image_url']}")
+            
+        except Exception as e:
+            print(f"Error processing product detail page {i+1}: {e}")
+            # Still add the product with the information we have
+            items.append({
+                "name": product_info['name'],
+                "id": f"error-{i+1}",
+                "url": product_info['url'],
+                "image_url": product_info['image_url'],
+                "price": product_info['price']
+            })
+    
+    # Final deduplication step - ensure no duplicate product IDs
+    deduplicated_items = []
+    seen_ids = set()
+    
+    for item in items:
+        # If we've seen this ID before, skip it
+        if item['id'] in seen_ids:
+            print(f"Removing duplicate product with ID: {item['id']}, name: {item['name']}")
+            continue
+        
+        # Otherwise, add it to our deduplicated list and track the ID
+        seen_ids.add(item['id'])
+        deduplicated_items.append(item)
+    
+    if len(items) != len(deduplicated_items):
+        print(f"Removed {len(items) - len(deduplicated_items)} duplicate products by ID")
+    
+    print(f"Successfully processed {len(deduplicated_items)} unique products")
+    return deduplicated_items
+
+def save_to_csv(items, category="produce", filename=None):
     """Save the scraped items to a CSV file."""
+    if filename is None:
+        filename = f"costco_{category}_items.csv"
+    
     fieldnames = ["name", "id", "url", "image_url", "price"]
     
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
@@ -542,26 +1098,27 @@ def save_to_csv(items, filename="costco_produce_items.csv"):
         writer.writerows(items)
     
     print(f"Data saved to {filename}")
-    print(f"Total items: {len(items)}")
+    print(f"Total unique items: {len(items)}")
 
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Costco Sameday Crawler')
     parser.add_argument('--visible', action='store_true', help='Run in visible mode (not headless)')
     parser.add_argument('--zipcode', type=str, default='94107', help='ZIP code for delivery location')
-    parser.add_argument('--output', type=str, default='costco_produce_items.csv', help='Output CSV filename')
+    parser.add_argument('--output', type=str, default=None, help='Output CSV filename')
     parser.add_argument('--max', type=int, default=0, help='Maximum number of items to crawl (for testing, 0 = no limit)')
+    parser.add_argument('--category', type=str, default='produce', help='Category to crawl (e.g., produce, bakery)')
     args = parser.parse_args()
     
-    # Generate filename with zipcode and date
+    # Generate filename with category, zipcode and date
     today_date = datetime.datetime.now().strftime('%Y-%m-%d')
-    if args.output == 'costco_produce_items.csv':  # Only modify the default filename
-        filename = f"costco_produce_items_{args.zipcode}_{today_date}.csv"
+    if args.output is None:  # Only use auto-generated filename if no output specified
+        filename = f"costco_{args.category}_items_{args.zipcode}_{today_date}.csv"
     else:
         # If user specified custom filename, use that
         filename = args.output
     
-    print(f"Running with settings: visible={not args.visible}, zipcode={args.zipcode}, output={filename}, max_items={args.max}")
+    print(f"Running with settings: visible={not args.visible}, zipcode={args.zipcode}, category={args.category}, output={filename}, max_items={args.max}")
     
     driver = setup_driver(headless=not args.visible)
     try:
@@ -581,9 +1138,9 @@ def main():
         # Handle any popups after setting location
         handle_popups(driver)
         
-        items = scrape_produce_items(driver, max_items=args.max)
+        items = scrape_items(driver, category=args.category, max_items=args.max)
         if items:
-            save_to_csv(items, filename=filename)
+            save_to_csv(items, category=args.category, filename=filename)
         else:
             print("No items found to save.")
     

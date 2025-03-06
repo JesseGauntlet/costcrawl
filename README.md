@@ -1,6 +1,6 @@
 # Costco Sameday Crawler
 
-A Python script to crawl Costco's sameday delivery produce section and save product information to a CSV file.
+A Python script to crawl Costco's sameday delivery sections and save product information to a CSV file. Supports multiple departments and categories.
 
 ## Requirements
 
@@ -56,15 +56,53 @@ python costco_crawler.py
 This will:
 1. Launch a headless Chrome browser
 2. Set the delivery location to zip code 94107 (San Francisco)
-3. Navigate to the Costco produce section
-4. Scrape all product information (name, ID, URL, price)
-5. Save the results to `costco_produce_items.csv` in the current directory
+3. Navigate to the specified Costco department (defaults to produce)
+4. Scrape all product information (name, ID, URL, image URL, price)
+5. Save the results to a CSV file named `costco_[category]_items_[zipcode]_[date].csv`
+
+### Available Categories
+
+The script supports all major Costco Sameday departments:
+
+- `produce` - Fresh Produce
+- `bakery` - Bakery & Desserts
+- `meat` - Meat & Seafood
+- `deli` - Deli
+- `dairy` - Dairy & Eggs
+- `beverages` - Beverages
+- `pantry` - Pantry & Dry Goods
+- `snacks` - Snacks, Candy & Nuts
+- `frozen` - Frozen Foods
+- `household` - Home Essentials
+- `health` - Health & Personal Care
+- `baby` - Baby Products
+- `pet` - Pet Supplies
+- `alcohol` - Beer, Wine & Spirits
+- `auto` - Auto Accessories
+- `cleaning` - Cleaning & Laundry
+- `clothing` - Clothing Basics
+- `electronics` - Electronics & Computers
+- `garden` - Home Improvement & Garden
+- `jewelry` - Jewelry & Watches
+- `office` - Office Products
+- `paper` - Paper Products & Food Storage
+- `sports` - Sporting Goods
+- `toys` - Toys & Seasonal
+
+Special Collections:
+- `whats-new` - What's New
+- `weekly-savings` - Weekly Savings
+- `trending` - Trending Items
+- `kirkland` - Kirkland Signature Products
 
 ### Command-line Options
 
 The script supports several command-line options:
 
 ```bash
+# Specify a category to crawl
+python costco_crawler.py --category bakery
+
 # Run in visible (non-headless) mode for debugging
 python costco_crawler.py --visible
 
@@ -74,8 +112,11 @@ python costco_crawler.py --zipcode 90210
 # Specify a different output file
 python costco_crawler.py --output my_costco_items.csv
 
+# Limit the number of items (useful for testing)
+python costco_crawler.py --max 10
+
 # Combine options
-python costco_crawler.py --visible --zipcode 10001 --output nyc_produce.csv
+python costco_crawler.py --category electronics --visible --zipcode 10001 --output nyc_electronics.csv
 ```
 
 ## Debugging
@@ -83,50 +124,49 @@ python costco_crawler.py --visible --zipcode 10001 --output nyc_produce.csv
 The script includes robust debugging features:
 
 1. **Screenshot capture**: The script automatically takes screenshots at critical points:
-   - `initial_page.png`: The Costco Sameday homepage on initial load
    - `before_location.png`: Before entering zip code
-   - `after_zip_submission.png`: After zip code submission
-   - `location_error.png`: If an error occurs during location setting
-   - `produce_page_error.png`: If an error occurs on the product page
+   - `[category]_page_loaded.png`: After loading the category page
+   - `[category]_page_source.html`: HTML source for debugging
+   - `after_scrolling.png`: After scrolling to load all items
    - `no_products_found.png`: If no products can be located
 
 2. **Verbose logging**: The script outputs detailed information about:
+   - Category and URL being accessed
    - Selectors being tried
    - Navigation steps
    - Error handling
    - Popup/modal handling
+   - Product processing progress
 
-3. **Resilient navigation**: The script attempts multiple methods for:
+3. **Improved Scrolling**: The script uses an enhanced scrolling mechanism:
+   - Progressive scrolling (75% of viewport height at a time)
+   - Increased wait time between scrolls (5 seconds)
+   - More scroll attempts (15 maximum)
+   - Better detection of page bottom
+   - Improved handling of lazy-loaded content
+
+4. **Resilient navigation**: The script attempts multiple methods for:
    - Finding the ZIP code input field
    - Submitting the ZIP code
    - Handling various popups and modals
    - Detecting product listings
+   - Extracting product information
 
-4. **Visible mode**: Run with the `--visible` flag to see the browser in action:
+5. **Visible mode**: Run with the `--visible` flag to see the browser in action:
    ```bash
    python costco_crawler.py --visible
    ```
-
-## Customization
-
-You can customize the script behavior in several ways:
-
-1. **Command-line options**:
-   - `--zipcode` to change the delivery location
-   - `--output` to specify a different output filename
-   - `--visible` to run with a visible browser window
-
-2. **Code modification**:
-   - Edit the `scrape_produce_items` function to extract additional product details
-   - Modify selectors if the website structure changes
 
 ## Output
 
 The script generates a CSV file with the following columns:
 - name: Product name
-- id: Product ID
+- id: Product ID (Costco item number when available)
 - url: Product URL
+- image_url: High-resolution product image URL
 - price: Product price
+
+The output filename follows the pattern: `costco_[category]_items_[zipcode]_[date].csv`
 
 ## Troubleshooting
 
@@ -144,9 +184,22 @@ If you encounter issues:
    - Try running with visible mode for debugging: `python costco_crawler.py --visible`
 
 3. **"No items found" error**:
+   - Verify the category exists and is spelled correctly
    - Check if the website structure has changed
-   - Examine the screenshots in the working directory
-   - Try running with visible browser: `python costco_crawler.py --visible`
+   - Examine the category page source HTML saved in `[category]_page_source.html`
+   - Look at the screenshots in the working directory
+   - Try running with visible browser: `python costco_crawler.py --visible --category [category]`
+
+4. **Scrolling issues**:
+   - If items are being missed, try running in visible mode to observe the scrolling
+   - Check network connectivity as slow connections may need more time to load
+   - Consider increasing the wait time between scrolls in the code
+   - Verify that JavaScript is enabled in the browser
+
+5. **Age verification for alcohol**:
+   - Note that the `alcohol` category may require additional age verification
+   - The script currently does not handle age verification popups
+   - Consider using other categories if age verification is required
 
 ## Deactivating the Virtual Environment
 
